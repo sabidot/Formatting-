@@ -673,9 +673,85 @@ def fix_fonts(doc):
             run.font.name = SPEC["font"]
 
 
+# Colors that count as "intentional" and should be kept as-is
+# (highlights, known accent colours used for callouts etc.)
+_KEEP_COLORS = set()  # empty = reset ALL non-black to black (safe default)
+
+# These heading-style names should NOT be touched by body fixer
+_HEADING_STYLES = {f"Heading {i}" for i in range(1, 7)} | {"Title", "Subtitle"}
+
+
+def fix_body_text(doc):
+    """
+    For every non-heading paragraph:
+      1. Font size → 9pt (sz=18 half-pts) — clears run-level overrides
+      2. Color → black (000000) UNLESS the run is bold, italic, or highlighted
+         (those are intentional emphasis — keep their color)
+      3. Left-align paragraph
+      4. Bold / italic / highlight preserved as-is
+      5. Font → Lato
+    """
+    target_hpts = str(SPEC["body_pt"] * 2)   # "18" = 9pt
+
+    for para in doc.paragraphs:
+        # Skip headings entirely — handled by fix_heading_sizes
+        if para.style.name in _HEADING_STYLES:
+            continue
+
+        # Left-align body paragraphs
+        _set_para_jc(para, "left")
+
+        for run in para.runs:
+            rPr = run._r.find(qn("w:rPr"))
+            if rPr is None:
+                rPr = etree.SubElement(run._r, qn("w:rPr"))
+
+            # ── Font ──────────────────────────────────────────────────────
+            fonts = rPr.find(qn("w:rFonts"))
+            if fonts is None:
+                fonts = etree.SubElement(rPr, qn("w:rFonts"))
+            for attr in ("w:ascii", "w:hAnsi", "w:cs", "w:eastAsia"):
+                fonts.set(qn(attr), SPEC["font"])
+
+            # ── Size — always enforce 9pt on body runs ────────────────────
+            for tag in ("w:sz", "w:szCs"):
+                el = rPr.find(qn(tag))
+                if el is None:
+                    el = etree.SubElement(rPr, qn(tag))
+                el.set(qn("w:val"), target_hpts)
+
+            # ── Color ─────────────────────────────────────────────────────
+            # Detect intentional emphasis
+            is_bold      = rPr.find(qn("w:b"))      is not None
+            is_italic    = rPr.find(qn("w:i"))      is not None
+            is_highlight = rPr.find(qn("w:highlight")) is not None
+
+            color_el = rPr.find(qn("w:color"))
+            current_color = (
+                color_el.get(qn("w:val")) if color_el is not None else None
+            )
+
+            # Reset to black ONLY if:
+            #   - there IS a non-black color set at run level
+            #   - AND the run is not highlighted (highlights are intentional)
+            #   - AND the color is not a kept accent color
+            if (
+                current_color
+                and current_color not in ("000000", "auto", None)
+                and not is_highlight
+                and current_color not in _KEEP_COLORS
+            ):
+                if color_el is None:
+                    color_el = etree.SubElement(rPr, qn("w:color"))
+                color_el.set(qn("w:val"), "000000")
+
+            # Bold, italic, highlight — do NOT touch, preserve exactly
+
+
 def apply_all_fixes(doc):
     """Run all fixers in dependency order."""
     fix_fonts(doc)
+    fix_body_text(doc)        # size + color + alignment on body paragraphs
     fix_heading_sizes(doc)
     fix_table_outer_border(doc)
     fix_table_header_row(doc)
