@@ -1,6 +1,0 @@
-fastapi>=0.110.0
-uvicorn>=0.29.0
-python-multipart>=0.0.9
-python-docx>=1.1.0
-lxml>=5.2.0
-mangum>=0.17.0
