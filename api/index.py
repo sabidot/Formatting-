@@ -85,8 +85,17 @@ def _build_report(filename, flags, doc):
 @app.get("/")
 async def root():
     """Serve the frontend."""
-    html_path = Path(__file__).parent.parent / "static" / "index.html"
-    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+    # Works on both Render and Vercel regardless of working directory
+    base = Path(__file__).parent.parent
+    candidates = [
+        base / "static" / "index.html",
+        Path("static/index.html"),
+        Path("api/../static/index.html"),
+    ]
+    for p in candidates:
+        if p.exists():
+            return HTMLResponse(p.read_text(encoding="utf-8"))
+    return HTMLResponse("<h1>UI not found</h1><p>static/index.html missing</p>", status_code=404)
 
 
 @app.get("/health")
