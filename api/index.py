@@ -1,25 +1,19 @@
 """
-Document Formatting Agent — works on Render, Railway, and locally.
-Vercel adapter (Mangum) included but file size limits apply there.
+Document Formatting Agent
 """
 
 import json
 import io
-import zipfile
-import os
 import sys
-import shutil
-import tempfile
 import traceback
 from pathlib import Path
 
-# Project root on path so ppm_format_agent imports correctly
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from ppm_format_agent import (
@@ -31,7 +25,7 @@ from ppm_format_agent import (
 )
 
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Document Formatting Agent", version="1.2.0")
+app = FastAPI(title="Document Formatting Agent", version="1.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,7 +34,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static folder — resolve relative to this file so it works on any host
 _static = ROOT / "static"
 if _static.exists():
     app.mount("/static", StaticFiles(directory=str(_static)), name="static")
@@ -56,21 +49,18 @@ AGENTS = {
 }
 
 
-def _load_doc(agent_key: str, data: bytes):
-    if agent_key == "docx":
-        from docx import Document
-        return Document(io.BytesIO(data))
-    raise HTTPException(400, f"Unknown agent: {agent_key}")
+def _load_doc(data: bytes):
+    from docx import Document
+    return Document(io.BytesIO(data))
 
 
 def _build_report(filename, flags, doc):
-    doc_has_h2 = has_h2(doc)
     return {
         "file": filename,
         "total_flags": len(flags),
         "h1_context": (
             f"H2 present → H1 expected at {SPEC['h1_pt_with_h2']}pt"
-            if doc_has_h2
+            if has_h2(doc)
             else f"No H2 → H1 expected at {SPEC['h1_pt_no_h2']}pt"
         ),
         "severity_summary": {
@@ -90,11 +80,7 @@ def _build_report(filename, flags, doc):
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    candidates = [
-        ROOT / "static" / "index.html",
-        Path("static/index.html"),
-    ]
-    for p in candidates:
+    for p in [ROOT / "static" / "index.html", Path("static/index.html")]:
         if p.exists():
             return HTMLResponse(p.read_text(encoding="utf-8"))
     return HTMLResponse("<h1>UI not found</h1>", status_code=404)
@@ -102,7 +88,7 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "agents": list(AGENTS)}
+    return {"status": "ok"}
 
 
 @app.get("/agents")
@@ -114,13 +100,12 @@ async def list_agents():
 async def check_document(agent_key: str, file: UploadFile = File(...)):
     if agent_key not in AGENTS:
         raise HTTPException(404, f"Unknown agent '{agent_key}'")
-    agent = AGENTS[agent_key]
-    if not file.filename.lower().endswith(agent["accept"]):
-        raise HTTPException(400, f"Expected {agent['accept']} file")
+    if not file.filename.lower().endswith(AGENTS[agent_key]["accept"]):
+        raise HTTPException(400, f"Expected {AGENTS[agent_key]['accept']} file")
     data = await file.read()
     try:
-        doc   = _load_doc(agent_key, data)
-        flags = agent["run_checks"](doc)
+        doc   = _load_doc(data)
+        flags = AGENTS[agent_key]["run_checks"](doc)
         return JSONResponse(_build_report(file.filename, flags, doc))
     except HTTPException:
         raise
@@ -139,41 +124,31 @@ async def fix_document(agent_key: str, file: UploadFile = File(...)):
     data = await file.read()
     try:
         stem = Path(file.filename).stem
-        ext  = agent["accept"]
+        ext  = agent["accept"]   # ".docx"
 
-        doc   = _load_doc(agent_key, data)
-        flags = agent["run_checks"](doc)
-        report_json = json.dumps(
-            _build_report(file.filename, flags, doc), indent=2, ensure_ascii=False
-        ).encode("utf-8")
-
+        # Load → fix → save to memory buffer
+        doc = _load_doc(data)
         agent["apply_fixes"](doc)
 
-        # Save fixed docx to memory
-        fixed_buf = io.BytesIO()
-        doc.save(fixed_buf)
-        fixed_buf.seek(0)
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
 
-        # Build zip entirely in memory — no temp files, works on any host
-        zip_buf = io.BytesIO()
-        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr(f"{stem}_fixed{ext}", fixed_buf.read())
-            zf.writestr(f"{stem}_flags.json", report_json)
-        zip_buf.seek(0)
-
+        # Return as plain .docx — browser downloads it directly
         return Response(
-            content=zip_buf.read(),
-            media_type="application/zip",
-            headers={"Content-Disposition": f"attachment; filename={stem}_result.zip"},
+            content=buf.read(),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={
+                "Content-Disposition": f'attachment; filename="{stem}_fixed{ext}"'
+            },
         )
     except HTTPException:
         raise
     except Exception:
         raise HTTPException(500, traceback.format_exc())
 
-# ---------------------------------------------------------------------------
-# Vercel adapter (only used when deployed to Vercel)
-# ---------------------------------------------------------------------------
+
+# Vercel adapter
 try:
     from mangum import Mangum
     handler = Mangum(app, lifespan="off")
