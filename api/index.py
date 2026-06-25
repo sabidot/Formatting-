@@ -136,36 +136,39 @@ async def fix_document(agent_key: str, file: UploadFile = File(...)):
         raise HTTPException(400, f"Expected {agent['accept']} file")
 
     data = await file.read()
-    tmp  = tempfile.mkdtemp()
     try:
-        stem        = Path(file.filename).stem
-        ext         = agent["accept"]
-        fixed_path  = Path(tmp) / f"{stem}_fixed{ext}"
-        report_path = Path(tmp) / f"{stem}_flags.json"
-        zip_base    = Path(tmp) / f"{stem}_result"
+        stem = Path(file.filename).stem
+        ext  = agent["accept"]
 
         doc   = _load_doc(agent_key, data)
         flags = agent["run_checks"](doc)
-        report_path.write_text(
-            json.dumps(_build_report(file.filename, flags, doc), indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        agent["apply_fixes"](doc)
-        doc.save(str(fixed_path))
+        report_json = json.dumps(
+            _build_report(file.filename, flags, doc), indent=2, ensure_ascii=False
+        ).encode("utf-8")
 
-        zip_path = shutil.make_archive(str(zip_base), "zip", tmp)
-        return FileResponse(
-            zip_path,
+        agent["apply_fixes"](doc)
+
+        # Save fixed docx to memory
+        fixed_buf = io.BytesIO()
+        doc.save(fixed_buf)
+        fixed_buf.seek(0)
+
+        # Build zip entirely in memory — no temp files, works on any host
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(f"{stem}_fixed{ext}", fixed_buf.read())
+            zf.writestr(f"{stem}_flags.json", report_json)
+        zip_buf.seek(0)
+
+        return Response(
+            content=zip_buf.read(),
             media_type="application/zip",
-            filename=f"{stem}_result.zip",
+            headers={"Content-Disposition": f"attachment; filename={stem}_result.zip"},
         )
     except HTTPException:
         raise
     except Exception:
         raise HTTPException(500, traceback.format_exc())
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-
 
 # ---------------------------------------------------------------------------
 # Vercel adapter (only used when deployed to Vercel)
