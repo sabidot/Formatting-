@@ -1,10 +1,10 @@
 """
-Vercel serverless entry point.
-Vercel looks for handlers in the /api/ folder.
-This file wraps the FastAPI app with Mangum so Vercel can invoke it.
+Document Formatting Agent — works on Render, Railway, and locally.
+Vercel adapter (Mangum) included but file size limits apply there.
 """
 
 import json
+import io
 import os
 import sys
 import shutil
@@ -12,13 +12,14 @@ import tempfile
 import traceback
 from pathlib import Path
 
-# Make sure the project root is on the path so ppm_format_agent imports correctly
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Project root on path so ppm_format_agent imports correctly
+ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT))
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from mangum import Mangum
+from fastapi.staticfiles import StaticFiles
 
 from ppm_format_agent import (
     apply_all_fixes,
@@ -29,7 +30,7 @@ from ppm_format_agent import (
 )
 
 # ---------------------------------------------------------------------------
-app = FastAPI(title="PPM Formatting Agent", version="1.1.0")
+app = FastAPI(title="Document Formatting Agent", version="1.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,6 +38,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount static folder — resolve relative to this file so it works on any host
+_static = ROOT / "static"
+if _static.exists():
+    app.mount("/static", StaticFiles(directory=str(_static)), name="static")
 
 AGENTS = {
     "docx": {
@@ -52,7 +58,6 @@ AGENTS = {
 def _load_doc(agent_key: str, data: bytes):
     if agent_key == "docx":
         from docx import Document
-        import io
         return Document(io.BytesIO(data))
     raise HTTPException(400, f"Unknown agent: {agent_key}")
 
@@ -82,20 +87,16 @@ def _build_report(filename, flags, doc):
 # Routes
 # ---------------------------------------------------------------------------
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def root():
-    """Serve the frontend."""
-    # Works on both Render and Vercel regardless of working directory
-    base = Path(__file__).parent.parent
     candidates = [
-        base / "static" / "index.html",
+        ROOT / "static" / "index.html",
         Path("static/index.html"),
-        Path("api/../static/index.html"),
     ]
     for p in candidates:
         if p.exists():
             return HTMLResponse(p.read_text(encoding="utf-8"))
-    return HTMLResponse("<h1>UI not found</h1><p>static/index.html missing</p>", status_code=404)
+    return HTMLResponse("<h1>UI not found</h1>", status_code=404)
 
 
 @app.get("/health")
@@ -113,7 +114,7 @@ async def check_document(agent_key: str, file: UploadFile = File(...)):
     if agent_key not in AGENTS:
         raise HTTPException(404, f"Unknown agent '{agent_key}'")
     agent = AGENTS[agent_key]
-    if not file.filename.endswith(agent["accept"].lstrip(".")):
+    if not file.filename.lower().endswith(agent["accept"]):
         raise HTTPException(400, f"Expected {agent['accept']} file")
     data = await file.read()
     try:
@@ -131,7 +132,7 @@ async def fix_document(agent_key: str, file: UploadFile = File(...)):
     if agent_key not in AGENTS:
         raise HTTPException(404, f"Unknown agent '{agent_key}'")
     agent = AGENTS[agent_key]
-    if not file.filename.endswith(agent["accept"].lstrip(".")):
+    if not file.filename.lower().endswith(agent["accept"]):
         raise HTTPException(400, f"Expected {agent['accept']} file")
 
     data = await file.read()
@@ -167,6 +168,10 @@ async def fix_document(agent_key: str, file: UploadFile = File(...)):
 
 
 # ---------------------------------------------------------------------------
-# Vercel handler — THIS is what Vercel calls
+# Vercel adapter (only used when deployed to Vercel)
 # ---------------------------------------------------------------------------
-handler = Mangum(app, lifespan="off")
+try:
+    from mangum import Mangum
+    handler = Mangum(app, lifespan="off")
+except ImportError:
+    handler = None
