@@ -10,6 +10,7 @@ import sys
 import shutil
 import tempfile
 import traceback
+import zipfile
 from pathlib import Path
 
 # Project root on path so ppm_format_agent imports correctly
@@ -18,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from ppm_format_agent import (
