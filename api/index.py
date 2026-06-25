@@ -5,12 +5,12 @@ Vercel adapter (Mangum) included but file size limits apply there.
 
 import json
 import io
+import zipfile
 import os
 import sys
 import shutil
 import tempfile
 import traceback
-import zipfile
 from pathlib import Path
 
 # Project root on path so ppm_format_agent imports correctly
