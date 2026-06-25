@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Document Formatting: LCP</title>
+<title>Document Formatting — LightCastle</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -189,7 +189,7 @@
   <div id="drop-zone">
     <span class="dz-icon" id="dz-icon">📄</span>
     <h2 id="dz-title">Drop your .docx file here</h2>
-    <p id="dz-desc">Drop any .docx file to check or fix formatting</p>
+    <p id="dz-desc">PPM Impact Fund sector documents · any section</p>
     <button class="browse-btn" onclick="document.getElementById('file-input').click()">Browse files</button>
     <input type="file" id="file-input" accept=".docx">
   </div>
@@ -334,26 +334,38 @@
 
   async function runFix() {
     if (!selectedFile) return;
-    showProg('Applying fixes…');
-    const fd = new FormData();
-    fd.append('file', selectedFile);
+    showProg('Applying fixes and downloading…');
+    const stem = selectedFile.name.replace(/\.[^.]+$/, '');
+    const ext  = selectedFile.name.match(/\.[^.]+$/)?.[0] || '.docx';
     try {
-      // Kick off fix (downloads zip)
-      const fixRes = await fetch(`/fix/${activeAgent}`, { method:'POST', body:fd });
-      if (!fixRes.ok) throw new Error(await fixRes.text());
+      // Run fix + download fixed .docx directly
+      const fd1 = new FormData();
+      fd1.append('file', selectedFile);
+      const fixRes = await fetch(`/fix/${activeAgent}`, { method:'POST', body:fd1 });
+      if (!fixRes.ok) {
+        const errText = await fixRes.text();
+        throw new Error(errText);
+      }
       const blob = await fixRes.blob();
-      const stem = selectedFile.name.replace(/\.[^.]+$/, '');
       const url  = URL.createObjectURL(blob);
-      const link = document.getElementById('dl-link');
-      link.href = url; link.download = `${stem}_result.zip`; link.style.display = 'inline-flex';
-      link.click();
-      // Also fetch the check report for display
+      const a    = document.createElement('a');
+      a.href = url;
+      a.download = `${stem}_fixed${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      // Also run check to show flag report in UI
       showProg('Building flag report…');
-      const fd2 = new FormData(); fd2.append('file', selectedFile);
+      const fd2 = new FormData();
+      fd2.append('file', selectedFile);
       const checkRes = await fetch(`/check/${activeAgent}`, { method:'POST', body:fd2 });
-      renderReport(await checkRes.json(), true);
-      toast('Download started — check your Downloads folder.');
-    } catch(e) { toast('Error: ' + e.message); }
+      if (checkRes.ok) renderReport(await checkRes.json(), true);
+      toast('✅ Fixed file downloaded to your Downloads folder.');
+    } catch(e) {
+      toast('Error: ' + e.message.slice(0, 120));
+    }
     hideProg();
   }
 
